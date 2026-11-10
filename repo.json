@@ -1,0 +1,11 @@
+{
+  "packages": [
+    {
+      "id": "com.beb.plxnative.nightly",
+      "title": "PlxNative (Arr Edition)",
+      "shortDescription": "Native 60fps Plex client with Radarr and Sonarr integration",
+      "iconUri": "https://raw.githubusercontent.com/thisbansal/plx-native/arr-release/pkg/nightly/largeIcon.png",
+      "manifestUrl": "https://thisbansal.github.io/plx-native/packages/com.beb.plxnative.nightly.json"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "com.beb.plxnative.nightly",
+  "version": "0.10.20261110",
+  "type": "native",
+  "title": "PlxNative (Arr Edition)",
+  "appDescription": "Fast native Plex client for LG webOS with Radarr & Sonarr integration",
+  "iconUri": "https://raw.githubusercontent.com/thisbansal/plx-native/arr-release/pkg/nightly/largeIcon.png",
+  "sourceUrl": "https://github.com/thisbansal/plx-native",
+  "ipkUrl": "https://github.com/thisbansal/plx-native/releases/download/v0.10.20261110-arr/com.beb.plxnative.nightly_0.10.20261110_arm.ipk",
+  "ipkHash": {
+    "sha256": "8fe6ca1e42712a0a02e1dd9f92122bdc7c6d69f08b41ceb28b18bb1b842ba3a9"
+  }
+}
