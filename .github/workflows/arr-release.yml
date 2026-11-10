@@ -1,0 +1,204 @@
+name: Build & Release Arr Edition
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag (leave empty for automatic timestamped tag)'
+        required: false
+        default: ''
+  push:
+    branches:
+      - arr-release
+    tags:
+      - 'v*arr*'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: 'arr-release'
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build ARM IPK & Publish
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned Rust & ARMv7 target
+        uses: ./.github/actions/rust-toolchain
+
+      - name: Provision webOS NDK
+        id: ndk
+        uses: ./.github/actions/webos-ndk
+
+      - name: Build ARM package (.ipk)
+        env:
+          WEBOS_SDK: ${{ steps.ndk.outputs.sdk-dir }}
+          RELEASE: "1"
+          FLAVOR: "nightly"
+        run: |
+          set -euo pipefail
+          export PLX_NIGHTLY_DATE="$(date -u +%Y%m%d)"
+          echo "Building PlxNative Arr Edition for webOS ARM..."
+          make -j"$(nproc)"
+          make ipk
+
+      - name: Prepare Release Artifacts & Checksums
+        id: pkg
+        run: |
+          set -euo pipefail
+          IPK_PATH=$(ls pkg/com.beb.plxnative.nightly_*_arm.ipk | head -n 1)
+          IPK_NAME=$(basename "$IPK_PATH")
+          SHA256=$(sha256sum "$IPK_PATH" | awk '{print $1}')
+          
+          VERSION=$(echo "$IPK_NAME" | sed -E 's/com\.beb\.plxnative\.nightly_(.*)_arm\.ipk/\1/')
+          
+          TAG="${{ github.event.inputs.tag_name }}"
+          if [ -z "$TAG" ]; then
+            TAG="v${VERSION}-arr"
+          fi
+          
+          echo "ipk_path=$IPK_PATH" >> "$GITHUB_OUTPUT"
+          echo "ipk_name=$IPK_NAME" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.pkg.outputs.tag }}
+          IPK_PATH: ${{ steps.pkg.outputs.ipk_path }}
+          IPK_NAME: ${{ steps.pkg.outputs.ipk_name }}
+          SHA256: ${{ steps.pkg.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          
+          gh release delete "$TAG" --yes || true
+          git tag -d "$TAG" 2>/dev/null || true
+          git push origin ":refs/tags/$TAG" 2>/dev/null || true
+          
+          cat << EOF > /tmp/release_notes.md
+          ### PlxNative (Arr Edition)
+          Native LG webOS Plex client with built-in Radarr and Sonarr integration.
+
+          #### Installation:
+          - **webOS Dev Manager:** Download \`$IPK_NAME\` and drag-and-drop into Dev Manager.
+          - **Homebrew Channel Feed:** Add repository \`https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/repo.json\`
+
+          **Package SHA256:**
+          \`\`\`
+          $SHA256
+          \`\`\`
+          EOF
+          
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$IPK_PATH" --clobber
+            gh release edit "$TAG" --title "PlxNative (Arr Edition) $TAG" --notes-file /tmp/release_notes.md
+          else
+            gh release create "$TAG" "$IPK_PATH" \
+              --title "PlxNative (Arr Edition) $TAG" \
+              --notes-file /tmp/release_notes.md
+          fi
+
+      - name: Generate Homebrew Channel Repository Files
+        id: pages-data
+        run: |
+          set -euo pipefail
+          mkdir -p public/packages
+          
+          REPO_OWNER="${{ github.repository_owner }}"
+          REPO_NAME="${{ github.event.repository.name }}"
+          TAG="${{ steps.pkg.outputs.tag }}"
+          IPK_NAME="${{ steps.pkg.outputs.ipk_name }}"
+          SHA256="${{ steps.pkg.outputs.sha256 }}"
+          VERSION="${{ steps.pkg.outputs.version }}"
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${IPK_NAME}"
+          
+          cat << EOF > public/repo.json
+          {
+            "packages": [
+              {
+                "id": "com.beb.plxnative.nightly",
+                "title": "PlxNative (Arr Edition)",
+                "shortDescription": "Native 60fps Plex client with Radarr and Sonarr integration",
+                "iconUri": "https://raw.githubusercontent.com/${{ github.repository }}/arr-release/pkg/nightly/largeIcon.png",
+                "manifestUrl": "https://${REPO_OWNER}.github.io/${REPO_NAME}/packages/com.beb.plxnative.nightly.json"
+              }
+            ]
+          }
+          EOF
+
+          cat << EOF > public/packages/com.beb.plxnative.nightly.json
+          {
+            "id": "com.beb.plxnative.nightly",
+            "version": "${VERSION}",
+            "type": "native",
+            "title": "PlxNative (Arr Edition)",
+            "appDescription": "Fast native Plex client for LG webOS with Radarr & Sonarr integration",
+            "iconUri": "https://raw.githubusercontent.com/${{ github.repository }}/arr-release/pkg/nightly/largeIcon.png",
+            "sourceUrl": "https://github.com/${{ github.repository }}",
+            "ipkUrl": "${DOWNLOAD_URL}",
+            "ipkHash": {
+              "sha256": "${SHA256}"
+            }
+          }
+          EOF
+
+          cat << EOF > public/index.html
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <title>PlxNative (Arr Edition) - Homebrew Channel Repository</title>
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f1015; color: #f0f0f5; padding: 40px; max-width: 700px; margin: 0 auto; line-height: 1.6; }
+              h1 { color: #ffffff; font-size: 28px; margin-bottom: 8px; }
+              .badge { display: inline-block; background: #22c55e; color: #000; font-weight: bold; padding: 4px 10px; border-radius: 6px; font-size: 13px; margin-bottom: 24px; }
+              .box { background: #1a1c24; border: 1px solid #2e3240; border-radius: 10px; padding: 20px; margin: 20px 0; }
+              code { background: #262935; padding: 4px 8px; border-radius: 4px; font-size: 15px; color: #38bdf8; word-break: break-all; }
+              a { color: #38bdf8; text-decoration: none; }
+              a:hover { text-decoration: underline; }
+              ol li { margin-bottom: 12px; }
+            </style>
+          </head>
+          <body>
+            <h1>PlxNative (Arr Edition)</h1>
+            <div class="badge">LG webOS Homebrew Repository</div>
+            <p>Custom build of PlxNative with built-in Radarr and Sonarr integration.</p>
+            
+            <div class="box">
+              <h3>Add to LG TV Homebrew Channel:</h3>
+              <ol>
+                <li>Open <strong>Homebrew Channel</strong> on your LG TV.</li>
+                <li>Go to <strong>Settings</strong> &rarr; <strong>Repositories</strong> &rarr; <strong>Add Repository</strong>.</li>
+                <li>Enter the following URL:</li>
+              </ol>
+              <p><code>https://${REPO_OWNER}.github.io/${REPO_NAME}/repo.json</code></p>
+            </div>
+
+            <div class="box">
+              <h3>Manual Install:</h3>
+              <p>Download the latest <code>.ipk</code> package from <a href="https://github.com/${{ github.repository }}/releases/tag/${TAG}">GitHub Releases</a> and drag-and-drop into <strong>webOS Dev Manager</strong>.</p>
+            </div>
+          </body>
+          </html>
+          EOF
+
+      - name: Deploy to GitHub Pages Branch (gh-pages)
+        uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e # v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
+          publish_branch: gh-pages
+          force_orphan: true
